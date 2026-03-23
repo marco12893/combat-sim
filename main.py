@@ -1,214 +1,344 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 import random
 
 
-GRID_SIZE = 5
-MAX_HULL = 12
-MAX_AMMO = 6
-SEA_STATES = ["calm", "breezy", "rough"]
-DIRECTIONS = {
-    "n": (0, -1),
-    "s": (0, 1),
-    "e": (1, 0),
-    "w": (-1, 0),
-}
-
-
 @dataclass
-class Ship:
+class Fleet:
     name: str
-    x: int
-    y: int
-    hull: int = MAX_HULL
-    ammo: int = MAX_AMMO
-    repair_kits: int = 2
+    destroyers: int = 0
+    frigates: int = 0
+    corvettes: int = 0
+    submarines: int = 0
+    cruisers: int = 0
+    battleships: int = 0
+    carriers: int = 0
+    aircraft: int = 0
+    modifier: int = 0
 
-    def is_sunk(self) -> bool:
-        return self.hull <= 0
+    @property
+    def light(self) -> int:
+        return self.destroyers + self.frigates + self.corvettes + self.submarines
 
-    def position(self) -> tuple[int, int]:
-        return self.x, self.y
+    @property
+    def moderate(self) -> int:
+        return self.cruisers
 
+    @property
+    def heavy(self) -> int:
+        return self.battleships
 
-def clamp(value: int, low: int, high: int) -> int:
-    return max(low, min(high, value))
+    @property
+    def carrier_air_wings(self) -> int:
+        # Carriers are support platforms. Each aircraft bought adds a 1d3 strike.
+        return self.aircraft
 
-
-def manhattan_distance(a: Ship, b: Ship) -> int:
-    return abs(a.x - b.x) + abs(a.y - b.y)
-
-
-def move_ship(ship: Ship, direction: str) -> str:
-    dx, dy = DIRECTIONS[direction]
-    old_x, old_y = ship.x, ship.y
-    ship.x = clamp(ship.x + dx, 0, GRID_SIZE - 1)
-    ship.y = clamp(ship.y + dy, 0, GRID_SIZE - 1)
-
-    if (ship.x, ship.y) == (old_x, old_y):
-        return f"{ship.name} is already at the edge of the map."
-    return f"{ship.name} sails to sector {format_sector(ship.x, ship.y)}."
-
-
-def fire(attacker: Ship, defender: Ship, sea_state: str) -> str:
-    if attacker.ammo <= 0:
-        return f"{attacker.name} has no cannonballs left."
-
-    attacker.ammo -= 1
-    distance = manhattan_distance(attacker, defender)
-    hit_chance = 0.85 - (distance * 0.15)
-
-    if sea_state == "breezy":
-        hit_chance -= 0.05
-    elif sea_state == "rough":
-        hit_chance -= 0.15
-
-    hit_chance = max(0.2, min(0.9, hit_chance))
-    if random.random() > hit_chance:
-        return f"{attacker.name} fires and misses."
-
-    damage = random.randint(2, 4)
-    if sea_state == "calm":
-        damage += 1
-    defender.hull = max(0, defender.hull - damage)
-    if defender.is_sunk():
-        return f"{attacker.name} lands a devastating hit for {damage} damage and sinks {defender.name}!"
-    return f"{attacker.name} hits {defender.name} for {damage} damage."
+    def has_surface_ships(self) -> bool:
+        return self.light > 0 or self.moderate > 0 or self.heavy > 0
 
 
-def repair(ship: Ship) -> str:
-    if ship.repair_kits <= 0:
-        return f"{ship.name} has no repair kits remaining."
-    if ship.hull >= MAX_HULL:
-        return f"{ship.name} is already at full strength."
-
-    ship.repair_kits -= 1
-    restored = min(3, MAX_HULL - ship.hull)
-    ship.hull += restored
-    return f"{ship.name} repairs {restored} hull."
+def roll_die(sides: int) -> int:
+    return random.randint(1, sides)
 
 
-def format_sector(x: int, y: int) -> str:
-    return f"{chr(65 + x)}{y + 1}"
+def roll_pool(count: int, sides: int, modifier: int) -> tuple[int, list[int]]:
+    rolls = [roll_die(sides) + modifier for _ in range(count)]
+    return sum(rolls), rolls
 
 
-def draw_map(player: Ship, enemy: Ship) -> None:
-    print("\nSea map:")
-    header = "   " + " ".join(chr(65 + i) for i in range(GRID_SIZE))
-    print(header)
-    for y in range(GRID_SIZE):
-        row = ["."] * GRID_SIZE
-        if player.y == y:
-            row[player.x] = "P"
-        if enemy.y == y:
-            row[enemy.x] = "X" if row[enemy.x] == "." else "!"
-        print(f"{y + 1}  " + " ".join(row))
+def format_rolls(rolls: list[int], sides: int, modifier: int) -> str:
+    if not rolls:
+        return "0"
+    mod_text = f"{modifier:+d}" if modifier else ""
+    return f"{len(rolls)}d{sides}{mod_text} -> {rolls} = {sum(rolls)}"
 
 
-def print_status(player: Ship, enemy: Ship, sea_state: str) -> None:
-    print(f"\nSea state: {sea_state}")
-    print(
-        f"Your ship: hull {player.hull}/{MAX_HULL}, ammo {player.ammo}/{MAX_AMMO}, "
-        f"repairs {player.repair_kits}, position {format_sector(player.x, player.y)}"
+def resolve_band(
+    attackers: int,
+    attacker_sides: int,
+    attacker_modifier: int,
+    defenders: int,
+    defender_sides: int,
+    defender_modifier: int,
+    label: str,
+) -> tuple[int, str]:
+    attack_total, attack_rolls = roll_pool(attackers, attacker_sides, attacker_modifier)
+    defense_total, defense_rolls = roll_pool(defenders, defender_sides, defender_modifier)
+    damage = max(0, attack_total - defense_total)
+    text = (
+        f"{label}: attack {format_rolls(attack_rolls, attacker_sides, attacker_modifier)} "
+        f"vs defense {format_rolls(defense_rolls, defender_sides, defender_modifier)} "
+        f"=> damage {damage}"
     )
-    print(
-        f"Enemy ship: hull {enemy.hull}/{MAX_HULL}, ammo {enemy.ammo}/{MAX_AMMO}, "
-        f"position {format_sector(enemy.x, enemy.y)}"
-    )
-    print(f"Range to target: {manhattan_distance(player, enemy)}")
+    return damage, text
 
 
-def choose_sea_state() -> str:
-    return random.choice(SEA_STATES)
+def carrier_can_be_targeted(target: Fleet) -> bool:
+    return not target.has_surface_ships()
 
 
-def player_turn(player: Ship, enemy: Ship, sea_state: str) -> None:
+def resolve_battle(attacker: Fleet, defender: Fleet) -> dict:
+    attacker_lines: list[str] = []
+    defender_lines: list[str] = []
+    attacker_damage = 0
+    defender_damage = 0
+
+    # Light vs Light, else Light spills upward into Moderate, else into Heavy.
+    if attacker.light > 0:
+        if defender.light > 0:
+            damage, text = resolve_band(
+                attacker.light, 6, attacker.modifier,
+                defender.light, 6, defender.modifier,
+                "Attacker light vs Defender light",
+            )
+        elif defender.moderate > 0:
+            damage, text = resolve_band(
+                attacker.light, 6, attacker.modifier,
+                defender.moderate, 8, defender.modifier,
+                "Attacker light vs Defender moderate",
+            )
+        elif defender.heavy > 0:
+            damage, text = resolve_band(
+                attacker.light, 6, attacker.modifier,
+                defender.heavy * 2, 8, defender.modifier,
+                "Attacker light vs Defender heavy",
+            )
+        else:
+            damage, text = (0, "Attacker light has no eligible surface target.")
+        attacker_damage += damage
+        attacker_lines.append(text)
+
+    # Moderate vs Moderate, else spills upward into Heavy.
+    if attacker.moderate > 0:
+        if defender.moderate > 0:
+            damage, text = resolve_band(
+                attacker.moderate, 8, attacker.modifier,
+                defender.moderate, 8, defender.modifier,
+                "Attacker moderate vs Defender moderate",
+            )
+        elif defender.heavy > 0:
+            damage, text = resolve_band(
+                attacker.moderate, 8, attacker.modifier,
+                defender.heavy * 2, 8, defender.modifier,
+                "Attacker moderate vs Defender heavy",
+            )
+        else:
+            damage, text = (0, "Attacker moderate has no eligible surface target.")
+        attacker_damage += damage
+        attacker_lines.append(text)
+
+    # Heavy can engage Heavy, or if no enemy heavy then split against Light and Moderate.
+    if attacker.heavy > 0:
+        if defender.heavy > 0:
+            damage, text = resolve_band(
+                attacker.heavy * 2, 8, attacker.modifier,
+                defender.heavy * 2, 8, defender.modifier,
+                "Attacker heavy vs Defender heavy",
+            )
+            attacker_damage += damage
+            attacker_lines.append(text)
+        else:
+            if defender.light > 0:
+                damage, text = resolve_band(
+                    attacker.heavy * 2, 8, attacker.modifier,
+                    defender.light, 6, defender.modifier,
+                    "Attacker heavy vs Defender light",
+                )
+                attacker_damage += damage
+                attacker_lines.append(text)
+            if defender.moderate > 0:
+                damage, text = resolve_band(
+                    attacker.heavy * 2, 8, attacker.modifier,
+                    defender.moderate, 8, defender.modifier,
+                    "Attacker heavy vs Defender moderate",
+                )
+                attacker_damage += damage
+                attacker_lines.append(text)
+            if defender.light == 0 and defender.moderate == 0:
+                attacker_lines.append("Attacker heavy has no eligible surface target.")
+
+    # Carriers add support and can strike carriers too. They can only be engaged if alone.
+    if attacker.carrier_air_wings > 0:
+        damage, text = resolve_band(
+            attacker.carrier_air_wings, 3, attacker.modifier,
+            max(1, defender.carrier_air_wings), 3, defender.modifier,
+            "Attacker carrier air wing strike",
+        )
+        attacker_damage += damage
+        attacker_lines.append(text)
+        if carrier_can_be_targeted(defender):
+            attacker_lines.append("Defender carriers are exposed because no surface ships remain in the fleet.")
+        else:
+            attacker_lines.append("Defender carriers stay screened behind surface ships.")
+
+    # Defender attacks back simultaneously.
+    if defender.light > 0:
+        if attacker.light > 0:
+            damage, text = resolve_band(
+                defender.light, 6, defender.modifier,
+                attacker.light, 6, attacker.modifier,
+                "Defender light vs Attacker light",
+            )
+        elif attacker.moderate > 0:
+            damage, text = resolve_band(
+                defender.light, 6, defender.modifier,
+                attacker.moderate, 8, attacker.modifier,
+                "Defender light vs Attacker moderate",
+            )
+        elif attacker.heavy > 0:
+            damage, text = resolve_band(
+                defender.light, 6, defender.modifier,
+                attacker.heavy * 2, 8, attacker.modifier,
+                "Defender light vs Attacker heavy",
+            )
+        else:
+            damage, text = (0, "Defender light has no eligible surface target.")
+        defender_damage += damage
+        defender_lines.append(text)
+
+    if defender.moderate > 0:
+        if attacker.moderate > 0:
+            damage, text = resolve_band(
+                defender.moderate, 8, defender.modifier,
+                attacker.moderate, 8, attacker.modifier,
+                "Defender moderate vs Attacker moderate",
+            )
+        elif attacker.heavy > 0:
+            damage, text = resolve_band(
+                defender.moderate, 8, defender.modifier,
+                attacker.heavy * 2, 8, attacker.modifier,
+                "Defender moderate vs Attacker heavy",
+            )
+        else:
+            damage, text = (0, "Defender moderate has no eligible surface target.")
+        defender_damage += damage
+        defender_lines.append(text)
+
+    if defender.heavy > 0:
+        if attacker.heavy > 0:
+            damage, text = resolve_band(
+                defender.heavy * 2, 8, defender.modifier,
+                attacker.heavy * 2, 8, attacker.modifier,
+                "Defender heavy vs Attacker heavy",
+            )
+            defender_damage += damage
+            defender_lines.append(text)
+        else:
+            if attacker.light > 0:
+                damage, text = resolve_band(
+                    defender.heavy * 2, 8, defender.modifier,
+                    attacker.light, 6, attacker.modifier,
+                    "Defender heavy vs Attacker light",
+                )
+                defender_damage += damage
+                defender_lines.append(text)
+            if attacker.moderate > 0:
+                damage, text = resolve_band(
+                    defender.heavy * 2, 8, defender.modifier,
+                    attacker.moderate, 8, attacker.modifier,
+                    "Defender heavy vs Attacker moderate",
+                )
+                defender_damage += damage
+                defender_lines.append(text)
+            if attacker.light == 0 and attacker.moderate == 0:
+                defender_lines.append("Defender heavy has no eligible surface target.")
+
+    if defender.carrier_air_wings > 0:
+        damage, text = resolve_band(
+            defender.carrier_air_wings, 3, defender.modifier,
+            max(1, attacker.carrier_air_wings), 3, attacker.modifier,
+            "Defender carrier air wing strike",
+        )
+        defender_damage += damage
+        defender_lines.append(text)
+        if carrier_can_be_targeted(attacker):
+            defender_lines.append("Attacker carriers are exposed because no surface ships remain in the fleet.")
+        else:
+            defender_lines.append("Attacker carriers stay screened behind surface ships.")
+
+    return {
+        "attacker_damage": attacker_damage,
+        "defender_damage": defender_damage,
+        "attacker_lines": attacker_lines,
+        "defender_lines": defender_lines,
+    }
+
+
+def prompt_int(label: str) -> int:
     while True:
-        command = input(
-            "\nChoose action: move [n/s/e/w], fire, repair, status, quit\n> "
-        ).strip().lower()
-
-        if command == "quit":
-            raise SystemExit("You abandon the battle.")
-
-        if command == "status":
-            draw_map(player, enemy)
-            print_status(player, enemy, sea_state)
+        try:
+            raw = input(f"{label}: ").strip()
+        except EOFError as exc:
+            raise SystemExit("\nInput ended before fleet setup was complete.") from exc
+        try:
+            value = int(raw)
+        except ValueError:
+            print("Enter a whole number.")
             continue
-
-        if command.startswith("move "):
-            _, _, direction = command.partition(" ")
-            if direction in DIRECTIONS:
-                print(move_ship(player, direction))
-                return
-            print("Use move n, move s, move e, or move w.")
+        if value < 0:
+            print("Use 0 or a positive number.")
             continue
-
-        if command == "fire":
-            print(fire(player, enemy, sea_state))
-            return
-
-        if command == "repair":
-            print(repair(player))
-            return
-
-        print("Unknown command.")
+        return value
 
 
-def enemy_turn(enemy: Ship, player: Ship, sea_state: str) -> None:
-    if enemy.is_sunk():
-        return
+def build_fleet(name: str) -> Fleet:
+    print(f"\n{name} fleet setup")
+    return Fleet(
+        name=name,
+        destroyers=prompt_int("Destroyers"),
+        frigates=prompt_int("Frigates"),
+        corvettes=prompt_int("Corvettes"),
+        submarines=prompt_int("Submarines"),
+        cruisers=prompt_int("Cruisers"),
+        battleships=prompt_int("Battleships"),
+        carriers=prompt_int("Aircraft carriers"),
+        aircraft=prompt_int("Aircraft wings"),
+        modifier=prompt_int("Per-ship modifier (+0, +1, +2, etc.)"),
+    )
 
-    distance = manhattan_distance(enemy, player)
-    if enemy.hull <= 4 and enemy.repair_kits > 0 and random.random() < 0.5:
-        print(repair(enemy))
-        return
 
-    if distance <= 2 and enemy.ammo > 0:
-        print(fire(enemy, player, sea_state))
-        return
+def describe_fleet(fleet: Fleet) -> str:
+    return (
+        f"{fleet.name}: L={fleet.light} (D:{fleet.destroyers} F:{fleet.frigates} "
+        f"C:{fleet.corvettes} S:{fleet.submarines}), M={fleet.moderate}, "
+        f"H={fleet.heavy}, Carriers={fleet.carriers}, Aircraft={fleet.aircraft}, "
+        f"Modifier={fleet.modifier:+d}"
+    )
 
-    dx = player.x - enemy.x
-    dy = player.y - enemy.y
-    if abs(dx) > abs(dy):
-        direction = "e" if dx > 0 else "w"
+
+def main() -> None:
+    print("Naval Fleet Dice Simulator")
+    print("Light ships use d6, cruisers use d8, battleships use 2d8, aircraft use d3.")
+    print("Submarines count as light ships. Carrier aircraft stack by aircraft wings bought.")
+
+    attacker = build_fleet("Attacker")
+    defender = build_fleet("Defender")
+
+    print("\nFleet summary")
+    print(describe_fleet(attacker))
+    print(describe_fleet(defender))
+
+    result = resolve_battle(attacker, defender)
+
+    print("\nAttacker fire plan")
+    for line in result["attacker_lines"]:
+        print(f"- {line}")
+
+    print("\nDefender fire plan")
+    for line in result["defender_lines"]:
+        print(f"- {line}")
+
+    print("\nBattle result")
+    print(f"{attacker.name} deals {result['attacker_damage']} total damage.")
+    print(f"{defender.name} deals {result['defender_damage']} total damage.")
+    if result["attacker_damage"] > result["defender_damage"]:
+        print(f"{attacker.name} wins the exchange.")
+    elif result["defender_damage"] > result["attacker_damage"]:
+        print(f"{defender.name} wins the exchange.")
     else:
-        direction = "s" if dy > 0 else "n"
-    print(move_ship(enemy, direction))
-
-
-def intro() -> None:
-    print("Simple Naval Combat Simulator")
-    print("Sink the enemy raider before it sinks you.")
-    print("P = your ship, X = enemy ship, ! = same sector")
-
-
-def run_game() -> None:
-    player = Ship("Frigate Valor", 0, GRID_SIZE - 1)
-    enemy = Ship("Raider Viper", GRID_SIZE - 1, 0)
-    turn = 1
-
-    intro()
-    while True:
-        sea_state = choose_sea_state()
-        print(f"\n--- Turn {turn} ---")
-        draw_map(player, enemy)
-        print_status(player, enemy, sea_state)
-
-        player_turn(player, enemy, sea_state)
-        if enemy.is_sunk():
-            print("\nVictory! The enemy ship slips beneath the waves.")
-            return
-
-        enemy_turn(enemy, player, sea_state)
-        if player.is_sunk():
-            print("\nDefeat. Your ship has been sunk.")
-            return
-
-        turn += 1
+        print("The exchange is a draw.")
 
 
 if __name__ == "__main__":
-    try:
-        run_game()
-    except SystemExit as exc:
-        print(exc)
+    main()
