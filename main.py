@@ -1,214 +1,204 @@
-from dataclasses import dataclass
 import random
 
 
-GRID_SIZE = 5
-MAX_HULL = 12
-MAX_AMMO = 6
-SEA_STATES = ["calm", "breezy", "rough"]
-DIRECTIONS = {
-    "n": (0, -1),
-    "s": (0, 1),
-    "e": (1, 0),
-    "w": (-1, 0),
+# Change these numbers to test battles.
+# Anything you leave out defaults to 0.
+ATTACKER = {"name": "Friendly Fleet", "destroyers": 3}
+DEFENDER = {"name": "Enemy Fleet", "submarines": 2, "battleships": 1}
+
+DEFAULT_FLEET = {
+    "name": "Fleet",
+    "destroyers": 0,
+    "frigates": 0,
+    "corvettes": 0,
+    "submarines": 0,
+    "cruisers": 0,
+    "battleships": 0,
+    "carriers": 0,
+    "aircraft": 0,
+    "modifier": 0,
 }
 
 
-@dataclass
-class Ship:
-    name: str
-    x: int
-    y: int
-    hull: int = MAX_HULL
-    ammo: int = MAX_AMMO
-    repair_kits: int = 2
-
-    def is_sunk(self) -> bool:
-        return self.hull <= 0
-
-    def position(self) -> tuple[int, int]:
-        return self.x, self.y
-
-
-def clamp(value: int, low: int, high: int) -> int:
-    return max(low, min(high, value))
+def make_fleet(data):
+    fleet = DEFAULT_FLEET.copy()
+    fleet.update(data)
+    fleet["light"] = (
+        fleet["destroyers"]
+        + fleet["frigates"]
+        + fleet["corvettes"]
+        + fleet["submarines"]
+    )
+    fleet["moderate"] = fleet["cruisers"]
+    fleet["heavy"] = fleet["battleships"]
+    fleet["surface"] = fleet["light"] + fleet["moderate"] + fleet["heavy"]
+    return fleet
 
 
-def manhattan_distance(a: Ship, b: Ship) -> int:
-    return abs(a.x - b.x) + abs(a.y - b.y)
+def roll_pool(count, sides, modifier):
+    rolls = [random.randint(1, sides) + modifier for _ in range(count)]
+    return sum(rolls), rolls
 
 
-def move_ship(ship: Ship, direction: str) -> str:
-    dx, dy = DIRECTIONS[direction]
-    old_x, old_y = ship.x, ship.y
-    ship.x = clamp(ship.x + dx, 0, GRID_SIZE - 1)
-    ship.y = clamp(ship.y + dy, 0, GRID_SIZE - 1)
-
-    if (ship.x, ship.y) == (old_x, old_y):
-        return f"{ship.name} is already at the edge of the map."
-    return f"{ship.name} sails to sector {format_sector(ship.x, ship.y)}."
+def pool_text(count, sides, modifier, rolls):
+    if count == 0:
+        return "0"
+    bonus = f"{modifier:+d}" if modifier else ""
+    return f"{count}d{sides}{bonus} -> {rolls} = {sum(rolls)}"
 
 
-def fire(attacker: Ship, defender: Ship, sea_state: str) -> str:
-    if attacker.ammo <= 0:
-        return f"{attacker.name} has no cannonballs left."
-
-    attacker.ammo -= 1
-    distance = manhattan_distance(attacker, defender)
-    hit_chance = 0.85 - (distance * 0.15)
-
-    if sea_state == "breezy":
-        hit_chance -= 0.05
-    elif sea_state == "rough":
-        hit_chance -= 0.15
-
-    hit_chance = max(0.2, min(0.9, hit_chance))
-    if random.random() > hit_chance:
-        return f"{attacker.name} fires and misses."
-
-    damage = random.randint(2, 4)
-    if sea_state == "calm":
-        damage += 1
-    defender.hull = max(0, defender.hull - damage)
-    if defender.is_sunk():
-        return f"{attacker.name} lands a devastating hit for {damage} damage and sinks {defender.name}!"
-    return f"{attacker.name} hits {defender.name} for {damage} damage."
+def duel(attacker_count, attacker_die, attacker_mod, defender_count, defender_die, defender_mod, label):
+    attack_total, attack_rolls = roll_pool(attacker_count, attacker_die, attacker_mod)
+    defense_total, defense_rolls = roll_pool(defender_count, defender_die, defender_mod)
+    damage = max(0, attack_total - defense_total)
+    line = (
+        f"{label}: "
+        f"{pool_text(attacker_count, attacker_die, attacker_mod, attack_rolls)} "
+        f"vs {pool_text(defender_count, defender_die, defender_mod, defense_rolls)} "
+        f"=> damage {damage}"
+    )
+    return damage, line
 
 
-def repair(ship: Ship) -> str:
-    if ship.repair_kits <= 0:
-        return f"{ship.name} has no repair kits remaining."
-    if ship.hull >= MAX_HULL:
-        return f"{ship.name} is already at full strength."
+def resolve_side(side_name, attacker, defender):
+    total_damage = 0
+    lines = []
+    mod_a = attacker["modifier"]
+    mod_d = defender["modifier"]
 
-    ship.repair_kits -= 1
-    restored = min(3, MAX_HULL - ship.hull)
-    ship.hull += restored
-    return f"{ship.name} repairs {restored} hull."
+    if attacker["light"] > 0:
+        if defender["light"] > 0:
+            damage, line = duel(
+                attacker["light"], 6, mod_a,
+                defender["light"], 6, mod_d,
+                f"{side_name} light vs enemy light",
+            )
+        elif defender["moderate"] > 0:
+            damage, line = duel(
+                attacker["light"], 6, mod_a,
+                defender["moderate"], 8, mod_d,
+                f"{side_name} light vs enemy moderate",
+            )
+        elif defender["heavy"] > 0:
+            damage, line = duel(
+                attacker["light"], 6, mod_a,
+                defender["heavy"] * 2, 8, mod_d,
+                f"{side_name} light vs enemy heavy",
+            )
+        else:
+            damage, line = 0, f"{side_name} light has no surface target."
+        total_damage += damage
+        lines.append(line)
+
+    if attacker["moderate"] > 0:
+        if defender["moderate"] > 0:
+            damage, line = duel(
+                attacker["moderate"], 8, mod_a,
+                defender["moderate"], 8, mod_d,
+                f"{side_name} moderate vs enemy moderate",
+            )
+        elif defender["heavy"] > 0:
+            damage, line = duel(
+                attacker["moderate"], 8, mod_a,
+                defender["heavy"] * 2, 8, mod_d,
+                f"{side_name} moderate vs enemy heavy",
+            )
+        else:
+            damage, line = 0, f"{side_name} moderate has no surface target."
+        total_damage += damage
+        lines.append(line)
+
+    if attacker["heavy"] > 0:
+        if defender["heavy"] > 0:
+            damage, line = duel(
+                attacker["heavy"] * 2, 8, mod_a,
+                defender["heavy"] * 2, 8, mod_d,
+                f"{side_name} heavy vs enemy heavy",
+            )
+            total_damage += damage
+            lines.append(line)
+        else:
+            if defender["light"] > 0:
+                damage, line = duel(
+                    attacker["heavy"] * 2, 8, mod_a,
+                    defender["light"], 6, mod_d,
+                    f"{side_name} heavy vs enemy light",
+                )
+                total_damage += damage
+                lines.append(line)
+            if defender["moderate"] > 0:
+                damage, line = duel(
+                    attacker["heavy"] * 2, 8, mod_a,
+                    defender["moderate"], 8, mod_d,
+                    f"{side_name} heavy vs enemy moderate",
+                )
+                total_damage += damage
+                lines.append(line)
+            if defender["light"] == 0 and defender["moderate"] == 0:
+                lines.append(f"{side_name} heavy has no surface target.")
+
+    if attacker["aircraft"] > 0:
+        damage, line = duel(
+            attacker["aircraft"], 3, mod_a,
+            max(1, defender["aircraft"]), 3, mod_d,
+            f"{side_name} carrier air strike",
+        )
+        total_damage += damage
+        lines.append(line)
+        if defender["surface"] == 0:
+            lines.append("Enemy carriers are exposed because they are alone.")
+        else:
+            lines.append("Enemy carriers are screened by surface ships.")
+
+    return total_damage, lines
 
 
-def format_sector(x: int, y: int) -> str:
-    return f"{chr(65 + x)}{y + 1}"
-
-
-def draw_map(player: Ship, enemy: Ship) -> None:
-    print("\nSea map:")
-    header = "   " + " ".join(chr(65 + i) for i in range(GRID_SIZE))
-    print(header)
-    for y in range(GRID_SIZE):
-        row = ["."] * GRID_SIZE
-        if player.y == y:
-            row[player.x] = "P"
-        if enemy.y == y:
-            row[enemy.x] = "X" if row[enemy.x] == "." else "!"
-        print(f"{y + 1}  " + " ".join(row))
-
-
-def print_status(player: Ship, enemy: Ship, sea_state: str) -> None:
-    print(f"\nSea state: {sea_state}")
+def print_fleet(fleet):
     print(
-        f"Your ship: hull {player.hull}/{MAX_HULL}, ammo {player.ammo}/{MAX_AMMO}, "
-        f"repairs {player.repair_kits}, position {format_sector(player.x, player.y)}"
+        f"{fleet['name']}: "
+        f"D={fleet['destroyers']} F={fleet['frigates']} C={fleet['corvettes']} "
+        f"S={fleet['submarines']} CR={fleet['cruisers']} BB={fleet['battleships']} "
+        f"CV={fleet['carriers']} AIR={fleet['aircraft']} MOD={fleet['modifier']:+d}"
     )
     print(
-        f"Enemy ship: hull {enemy.hull}/{MAX_HULL}, ammo {enemy.ammo}/{MAX_AMMO}, "
-        f"position {format_sector(enemy.x, enemy.y)}"
+        f"  Totals -> Light={fleet['light']} Moderate={fleet['moderate']} "
+        f"Heavy={fleet['heavy']}"
     )
-    print(f"Range to target: {manhattan_distance(player, enemy)}")
 
 
-def choose_sea_state() -> str:
-    return random.choice(SEA_STATES)
+def main():
+    attacker = make_fleet(ATTACKER)
+    defender = make_fleet(DEFENDER)
 
+    print("Naval Fleet Dice Simulator")
+    print("Edit ATTACKER and DEFENDER at the top of main.py to change ship counts.")
+    print("Any ship type you leave out automatically counts as 0.\n")
 
-def player_turn(player: Ship, enemy: Ship, sea_state: str) -> None:
-    while True:
-        command = input(
-            "\nChoose action: move [n/s/e/w], fire, repair, status, quit\n> "
-        ).strip().lower()
+    print_fleet(attacker)
+    print_fleet(defender)
 
-        if command == "quit":
-            raise SystemExit("You abandon the battle.")
+    attacker_damage, attacker_lines = resolve_side("Attacker", attacker, defender)
+    defender_damage, defender_lines = resolve_side("Defender", defender, attacker)
 
-        if command == "status":
-            draw_map(player, enemy)
-            print_status(player, enemy, sea_state)
-            continue
+    print("\nAttacker fire")
+    for line in attacker_lines:
+        print(f"- {line}")
 
-        if command.startswith("move "):
-            _, _, direction = command.partition(" ")
-            if direction in DIRECTIONS:
-                print(move_ship(player, direction))
-                return
-            print("Use move n, move s, move e, or move w.")
-            continue
+    print("\nDefender fire")
+    for line in defender_lines:
+        print(f"- {line}")
 
-        if command == "fire":
-            print(fire(player, enemy, sea_state))
-            return
+    print("\nResult")
+    print(f"{attacker['name']} deals {attacker_damage} damage.")
+    print(f"{defender['name']} deals {defender_damage} damage.")
 
-        if command == "repair":
-            print(repair(player))
-            return
-
-        print("Unknown command.")
-
-
-def enemy_turn(enemy: Ship, player: Ship, sea_state: str) -> None:
-    if enemy.is_sunk():
-        return
-
-    distance = manhattan_distance(enemy, player)
-    if enemy.hull <= 4 and enemy.repair_kits > 0 and random.random() < 0.5:
-        print(repair(enemy))
-        return
-
-    if distance <= 2 and enemy.ammo > 0:
-        print(fire(enemy, player, sea_state))
-        return
-
-    dx = player.x - enemy.x
-    dy = player.y - enemy.y
-    if abs(dx) > abs(dy):
-        direction = "e" if dx > 0 else "w"
+    if attacker_damage > defender_damage:
+        print(f"{attacker['name']} wins the exchange.")
+    elif defender_damage > attacker_damage:
+        print(f"{defender['name']} wins the exchange.")
     else:
-        direction = "s" if dy > 0 else "n"
-    print(move_ship(enemy, direction))
-
-
-def intro() -> None:
-    print("Simple Naval Combat Simulator")
-    print("Sink the enemy raider before it sinks you.")
-    print("P = your ship, X = enemy ship, ! = same sector")
-
-
-def run_game() -> None:
-    player = Ship("Frigate Valor", 0, GRID_SIZE - 1)
-    enemy = Ship("Raider Viper", GRID_SIZE - 1, 0)
-    turn = 1
-
-    intro()
-    while True:
-        sea_state = choose_sea_state()
-        print(f"\n--- Turn {turn} ---")
-        draw_map(player, enemy)
-        print_status(player, enemy, sea_state)
-
-        player_turn(player, enemy, sea_state)
-        if enemy.is_sunk():
-            print("\nVictory! The enemy ship slips beneath the waves.")
-            return
-
-        enemy_turn(enemy, player, sea_state)
-        if player.is_sunk():
-            print("\nDefeat. Your ship has been sunk.")
-            return
-
-        turn += 1
+        print("The exchange is a draw.")
 
 
 if __name__ == "__main__":
-    try:
-        run_game()
-    except SystemExit as exc:
-        print(exc)
+    main()
